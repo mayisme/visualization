@@ -1,0 +1,7 @@
+Model,Best Params,Test R2,Train R2,Test MAE,Test RMSE
+KNN,Failed,-999,-999,-999,-999
+RF,Failed,-999,-999,-999,-999
+XGB,Failed,-999,-999,-999,-999
+LGBM,Failed,-999,-999,-999,-999
+CatBoost,Failed,-999,-999,-999,-999
+MLP,Failed,-999,-999,-999,-999

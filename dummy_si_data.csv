@@ -1,0 +1,6 @@
+Na2CO3,SiO2,Ca(OH)2,Al2O3,Temp,Time,Phase,Additives,granular,water,Effective_Silicon
+10,60,5,5,300,2,Solid,None,Fine,Low,0.85
+12,55,6,4,320,3,Liquid,X,Coarse,Medium,0.90
+11,58,4,6,310,2.5,Solid,Y,Fine,High,0.88
+13,62,5,5,330,4,Liquid,None,Medium,Low,0.92
+10,59,6,4,300,3,Solid,X,Coarse,Medium,0.86

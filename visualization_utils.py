@@ -57,26 +57,412 @@ warnings.filterwarnings("ignore")
 # Add imports for advanced correlation matrix visualization
 from matplotlib.colors import Normalize
 from matplotlib.patches import Circle, Wedge
+from functools import wraps
+from typing import Optional, Tuple, List, Dict, Any # Added for plot_utils functions
 
-# Import refactoring tools for code optimization
-try:
-    from .plot_utils import (
-        PlotStyleConfig,
-        create_figure_with_style,
-        apply_axis_style,
-        save_and_close_figure,
-        safe_filename,
-        create_shap_subplot,
-        plot_error_handler,
-        add_performance_annotations,
-        get_plot_filepath,
-        create_subplot_grid
-    )
-    PLOT_UTILS_AVAILABLE = True
-    print("✅ 绘图工具模块导入成功 - 重构工具可用")
-except ImportError as e:
-    PLOT_UTILS_AVAILABLE = False
-    print(f"⚠️ 绘图工具模块不可用: {e} - 使用传统代码")
+# =============================================================================
+# START OF COPIED CONTENT FROM plot_utils.py
+# =============================================================================
+
+# =============================================================================
+# 样式配置类 - 统一管理所有绘图样式
+# =============================================================================
+
+class PlotStyleConfig:
+    """统一的绘图样式配置类"""
+
+    # 字体大小配置 - 论文标准
+    MAIN_TITLE_SIZE = 20      # 主标题
+    TITLE_SIZE = 18           # 图表标题
+    SUBTITLE_SIZE = 16        # 子标题
+    LABEL_SIZE = 14           # 轴标签
+    TICK_SIZE = 12            # 刻度标签
+    LEGEND_SIZE = 12          # 图例
+    ANNOTATION_SIZE = 10      # 注释
+
+    # viridis配色方案 - 专业且色盲友好
+    PRIMARY_COLOR = '#440154'     # 深紫色 (viridis起点)
+    SECONDARY_COLOR = '#21908c'   # 青绿色 (viridis中点)
+    TERTIARY_COLOR = '#fde725'    # 黄色 (viridis终点)
+    ACCENT_COLOR = '#31688e'      # 蓝紫色
+    NEUTRAL_COLOR = '#7e7e7e'     # 中性灰
+
+    # 特殊用途颜色
+    TRAIN_COLOR = PRIMARY_COLOR   # 训练集
+    TEST_COLOR = SECONDARY_COLOR  # 测试集
+    ERROR_COLOR = '#ff4444'       # 错误显示
+    SUCCESS_COLOR = '#44ff44'     # 成功显示
+
+    # 绘图参数
+    DPI = 300                     # 高质量输出
+    ALPHA = 0.6                   # 透明度
+    LINEWIDTH = 2                 # 线宽
+    GRID_ALPHA = 0.3             # 网格透明度
+
+    @classmethod
+    def get_viridis_palette(cls, n_colors: int) -> np.ndarray:
+        """获取viridis调色板"""
+        return plt.cm.viridis(np.linspace(0.2, 0.9, n_colors))
+
+    @classmethod
+    def get_categorical_colors(cls, n_colors: int) -> List[str]:
+        """获取分类数据颜色"""
+        base_colors = [cls.PRIMARY_COLOR, cls.SECONDARY_COLOR, cls.TERTIARY_COLOR, cls.ACCENT_COLOR]
+        if n_colors <= len(base_colors):
+            return base_colors[:n_colors]
+        # 如果需要更多颜色，使用viridis调色板
+        return [plt.cm.viridis(i / (n_colors - 1)) for i in range(n_colors)]
+
+# =============================================================================
+# 通用绘图工具函数
+# =============================================================================
+
+def safe_filename(name: str, prefix: str = "", suffix: str = "") -> str:
+    """
+    创建安全的文件名
+
+    参数:
+    -----------
+    name : str
+        原始名称
+    prefix : str
+        前缀
+    suffix : str
+        后缀
+
+    返回:
+    --------
+    str : 清理后的安全文件名
+    """
+    # 清理特殊字符
+    safe_name = name.replace(" ", "_").replace("(", "").replace(")", "")
+    safe_name = safe_name.replace("/", "_").replace("\\", "_").replace(":", "_")
+
+    # 组合文件名
+    if prefix:
+        safe_name = f"{prefix}_{safe_name}"
+    if suffix:
+        safe_name = f"{safe_name}_{suffix}"
+
+    return safe_name
+
+def create_figure_with_style(figsize: Tuple[int, int] = (12, 8),
+                           style: str = 'paper') -> Tuple[plt.Figure, plt.Axes]:
+    """
+    创建带有统一样式的图形
+
+    参数:
+    -----------
+    figsize : tuple
+        图形大小
+    style : str
+        样式类型 ('paper', 'presentation', 'simple')
+
+    返回:
+    --------
+    tuple : (figure, axes) 对象
+    """
+    fig, ax = plt.subplots(figsize=figsize, facecolor='white')
+    ax.set_facecolor('white')
+
+    if style == 'paper':
+        # 论文发表样式
+        ax.grid(alpha=PlotStyleConfig.GRID_ALPHA, color=PlotStyleConfig.NEUTRAL_COLOR)
+        ax.tick_params(axis='both', labelsize=PlotStyleConfig.TICK_SIZE)
+
+    return fig, ax
+
+def apply_axis_style(ax: plt.Axes,
+                    title: Optional[str] = None,
+                    xlabel: Optional[str] = None,
+                    ylabel: Optional[str] = None,
+                    title_size: int = None) -> None:
+    """
+    应用统一的轴样式
+
+    参数:
+    -----------
+    ax : matplotlib.axes.Axes
+        要设置样式的轴对象
+    title : str, optional
+        标题文本
+    xlabel : str, optional
+        x轴标签
+    ylabel : str, optional
+        y轴标签
+    title_size : int, optional
+        标题字体大小
+    """
+    if title:
+        size = title_size or PlotStyleConfig.TITLE_SIZE
+        ax.set_title(title, fontsize=size, fontweight='bold')
+
+    if xlabel:
+        ax.set_xlabel(xlabel, fontsize=PlotStyleConfig.LABEL_SIZE, fontweight='bold')
+
+    if ylabel:
+        ax.set_ylabel(ylabel, fontsize=PlotStyleConfig.LABEL_SIZE, fontweight='bold')
+
+    ax.tick_params(axis='both', labelsize=PlotStyleConfig.TICK_SIZE)
+    ax.grid(alpha=PlotStyleConfig.GRID_ALPHA, color=PlotStyleConfig.NEUTRAL_COLOR)
+
+def save_and_close_figure(fig: plt.Figure,
+                         filepath: str,
+                         dpi: int = None,
+                         bbox_inches: str = 'tight',
+                         facecolor: str = 'white',
+                         close_fig: bool = True) -> str:
+    """
+    保存并关闭图形
+
+    参数:
+    -----------
+    fig : matplotlib.figure.Figure
+        要保存的图形对象
+    filepath : str
+        保存路径
+    dpi : int, optional
+        分辨率
+    bbox_inches : str
+        边界框设置
+    facecolor : str
+        背景色
+    close_fig : bool
+        是否关闭图形
+
+    返回:
+    --------
+    str : 保存的文件路径
+    """
+    dpi = dpi or PlotStyleConfig.DPI
+
+    plt.tight_layout()
+    plt.savefig(filepath, dpi=dpi, bbox_inches=bbox_inches, facecolor=facecolor)
+
+    if close_fig:
+        plt.close(fig)
+
+    return filepath
+
+def create_subplot_grid(nrows: int, ncols: int,
+                       figsize: Tuple[int, int] = None,
+                       main_title: str = None) -> Tuple[plt.Figure, np.ndarray]:
+    """
+    创建子图网格
+
+    Parameters:
+    -----------
+    nrows : int
+        行数
+    ncols : int
+        列数
+    figsize : tuple, optional
+        图形大小
+    main_title : str, optional
+        主标题
+
+    Returns:
+    --------
+    tuple : (figure, axes_array)
+    """
+    if figsize is None:
+        figsize = (6 * ncols, 5 * nrows)
+
+    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=figsize, facecolor='white')
+
+    # 确保axes是数组格式
+    if nrows == 1 and ncols == 1:
+        axes = np.array([axes])
+    elif nrows == 1 or ncols == 1:
+        axes = axes if hasattr(axes, '__len__') else np.array([axes])
+    else:
+        axes = axes.flatten()
+
+    if main_title:
+        fig.suptitle(main_title, fontsize=PlotStyleConfig.MAIN_TITLE_SIZE,
+                    fontweight='bold', y=0.98)
+
+    return fig, axes
+
+# =============================================================================
+# 错误处理装饰器
+# =============================================================================
+
+def plot_error_handler(fallback_message: str = "绘图生成失败",
+                      return_on_error: Any = None):
+    """
+    绘图错误处理装饰器
+
+    参数:
+    -----------
+    fallback_message : str
+        错误时显示的消息
+    return_on_error : Any
+        错误时返回的值
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                print(f"❌ {fallback_message}: {e}")
+                return return_on_error
+        return wrapper
+    return decorator
+
+# =============================================================================
+# 专用绘图工具函数
+# =============================================================================
+
+def create_shap_subplot(ax: plt.Axes,
+                       shap_values_arg: np.ndarray, # Renamed to avoid conflict
+                       feature_names_arg: List[str], # Renamed to avoid conflict
+                       model_name_arg: str, # Renamed to avoid conflict
+                       r2_score_arg: float = None, # Renamed to avoid conflict
+                       top_n: int = 6) -> None:
+    """
+    创建SHAP特征重要性子图
+
+    参数:
+    -----------
+    ax : matplotlib.axes.Axes
+        子图轴对象
+    shap_values_arg : np.ndarray
+        SHAP值数组
+    feature_names_arg : list
+        特征名称列表
+    model_name_arg : str
+        模型名称
+    r2_score_arg : float, optional
+        R²分数
+    top_n : int
+        显示的特征数量
+    """
+    try:
+        # 计算特征重要性
+        feature_importance = np.abs(shap_values_arg).mean(0)
+        top_n = min(top_n, len(feature_importance))
+        sorted_idx = np.argsort(feature_importance)[-top_n:]
+
+        # 使用viridis渐变色
+        colors = PlotStyleConfig.get_viridis_palette(len(sorted_idx))
+        y_pos = np.arange(len(sorted_idx))
+
+        # 绘制条形图
+        ax.barh(y_pos, feature_importance[sorted_idx],
+               color=colors, alpha=PlotStyleConfig.ALPHA,
+               edgecolor=PlotStyleConfig.NEUTRAL_COLOR, linewidth=0.5)
+
+        # 设置标签
+        feature_labels = [feature_names_arg[i] for i in sorted_idx]
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(feature_labels, fontsize=PlotStyleConfig.TICK_SIZE, fontweight='bold')
+
+        # 设置标题
+        title = f'{model_name_arg}'
+        if r2_score_arg is not None:
+            title += f'\n(R² = {r2_score_arg:.3f})'
+
+        apply_axis_style(ax, title=title, xlabel='Mean |SHAP Value|')
+
+    except Exception as e:
+        # 错误处理
+        ax.text(0.5, 0.5, f'SHAP Failed for {model_name_arg}\n{str(e)[:30]}...',
+               ha='center', va='center', fontsize=PlotStyleConfig.TICK_SIZE,
+               color=PlotStyleConfig.ERROR_COLOR,
+               bbox=dict(boxstyle="round,pad=0.3", facecolor="lightcoral"))
+        ax.set_title(f'{model_name_arg} (Failed)', fontsize=PlotStyleConfig.SUBTITLE_SIZE, fontweight='bold')
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+def add_performance_annotations(ax: plt.Axes,
+                              bars: Any,
+                              values: List[float],
+                              format_str: str = '{:.3f}') -> None:
+    """
+    为条形图添加性能标注
+
+    Parameters:
+    -----------
+    ax : matplotlib.axes.Axes
+        轴对象
+    bars : matplotlib container
+        条形图对象
+    values : list
+        数值列表
+    format_str : str
+        格式化字符串
+    """
+    for bar, value in zip(bars, values):
+        height = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+               format_str.format(value), ha='center', va='bottom',
+               fontweight='bold', fontsize=PlotStyleConfig.ANNOTATION_SIZE)
+
+# =============================================================================
+# 文件管理工具
+# =============================================================================
+
+def ensure_output_directory(output_folder: str) -> str:
+    """
+    确保输出目录存在
+
+    Parameters:
+    -----------
+    output_folder : str
+        输出文件夹路径
+
+    Returns:
+    --------
+    str : 确认存在的文件夹路径
+    """
+    os.makedirs(output_folder, exist_ok=True)
+    return output_folder
+
+def get_plot_filepath(output_folder: str,
+                     filename: str,
+                     model_name: str = None,
+                     plot_type: str = None) -> str:
+    """
+    生成绘图文件路径
+
+    Parameters:
+    -----------
+    output_folder : str
+        输出文件夹
+    filename : str
+        基础文件名
+    model_name : str, optional
+        模型名称
+    plot_type : str, optional
+        图表类型
+
+    Returns:
+    --------
+    str : 完整的文件路径
+    """
+    ensure_output_directory(output_folder)
+
+    # 构建文件名
+    parts = []
+    if model_name:
+        parts.append(safe_filename(model_name))
+    if plot_type:
+        parts.append(plot_type)
+    parts.append(filename)
+
+    final_filename = "_".join(parts) + ".png"
+    return os.path.join(output_folder, final_filename)
+
+# =============================================================================
+# END OF COPIED CONTENT FROM plot_utils.py
+# =============================================================================
+
+# PLOT_UTILS_AVAILABLE is True as utilities are now integrated.
+PLOT_UTILS_AVAILABLE = True
+# print("✅ Plotting utilities integrated directly into visualization_utils.py") # No longer needed to print this.
+
 
 # Add PDP support
 try:
@@ -88,28 +474,35 @@ except ImportError:
 
 # --- Unified Plotting Style Configuration ---
 # Use a professional and publication-ready style for consistency and aesthetics.
+# Base style
 plt.style.use('seaborn-v0_8-whitegrid')
 
-# Update font settings for clarity and consistency in publications.
-plt.rcParams.update({
-    'font.family': 'sans-serif',
-    'font.sans-serif': ['Arial', 'DejaVu Sans', 'Liberation Sans'],
-    'font.size': 12,
-    'axes.titlesize': 16,
-    'axes.labelsize': 14,
-    'xtick.labelsize': 12,
-    'ytick.labelsize': 12,
-    'legend.fontsize': 12,
-    'figure.titlesize': 18,
-    'axes.unicode_minus': False,
-})
+# Apply font settings from PlotStyleConfig for consistency.
+# These specific plt.rcParams updates can be removed as PlotStyleConfig handles them
+# through its constants when figures/axes are created or styled by the helper functions.
+# plt.rcParams.update({
+#     'font.family': 'sans-serif',
+#     'font.sans-serif': ['Arial', 'DejaVu Sans', 'Liberation Sans'],
+#     'font.size': PlotStyleConfig.TICK_SIZE, # Example: Use config
+#     'axes.titlesize': PlotStyleConfig.TITLE_SIZE,
+#     'axes.labelsize': PlotStyleConfig.LABEL_SIZE,
+#     'xtick.labelsize': PlotStyleConfig.TICK_SIZE,
+#     'ytick.labelsize': PlotStyleConfig.TICK_SIZE,
+#     'legend.fontsize': PlotStyleConfig.LEGEND_SIZE,
+#     'figure.titlesize': PlotStyleConfig.MAIN_TITLE_SIZE,
+#     'axes.unicode_minus': False,
+# })
 
-# 🎨 Color definitions now managed by PlotStyleConfig in plot_utils.py
-# Legacy color constants for backward compatibility (will be removed in future versions)
-CONTINUOUS_CMAP = 'viridis'
-SCATTER_COLOR_1 = '#2E8B57'  # Sea Green
-SCATTER_COLOR_2 = '#FF6B35'  # Orange Red
-VIRIDIS_NEUTRAL = '#7e7e7e'  # Gray
+# 🎨 Color definitions are now primarily managed by PlotStyleConfig.
+# Legacy color constants are kept for now if directly used by functions not yet fully refactored,
+# but the goal is to phase them out or map them to PlotStyleConfig values.
+CONTINUOUS_CMAP = 'viridis' # This is a colormap name, not a single color. Can be kept.
+# SCATTER_COLOR_1 = PlotStyleConfig.PRIMARY_COLOR # Example of mapping
+# SCATTER_COLOR_2 = PlotStyleConfig.SECONDARY_COLOR # Example of mapping
+# VIRIDIS_NEUTRAL = PlotStyleConfig.NEUTRAL_COLOR # Example of mapping
+SCATTER_COLOR_1 = '#2E8B57'  # Sea Green - Keep for now if specific visual is desired
+SCATTER_COLOR_2 = '#FF6B35'  # Orange Red - Keep for now
+VIRIDIS_NEUTRAL = PlotStyleConfig.NEUTRAL_COLOR # Directly use from config
 
 # New helper function to get regressor instances
 def get_regressor_instance(model_name_str: str, random_state: int = 42):
@@ -193,9 +586,9 @@ def create_advanced_correlation_matrix(correlation_matrix, output_folder):
         feature_names = correlation_matrix.columns.tolist()
         
         # Set up the plot aesthetics
-        fig, ax = plt.subplots(figsize=(12, 10), facecolor='white')
-        ax.set_facecolor('white')
-        fig.suptitle("Silicon Material Parameter Correlation Matrix", fontsize=16, y=0.96, fontweight='bold')
+        fig, ax = create_figure_with_style(figsize=(12, 10)) # Use helper
+        # fig.suptitle("Silicon Material Parameter Correlation Matrix", fontsize=16, y=0.96, fontweight='bold') # Apply via apply_axis_style or direct if needed
+        apply_axis_style(ax, title="Silicon Material Parameter Correlation Matrix", title_size=PlotStyleConfig.MAIN_TITLE_SIZE) # Adjusted title size
         
         n = len(feature_names)
         
@@ -264,26 +657,24 @@ def create_advanced_correlation_matrix(correlation_matrix, output_folder):
         sm.set_array([])
         cbar = fig.colorbar(sm, cax=cbar_ax)
         cbar.set_label('Correlation Coefficient', size=12, fontweight='bold')
-        cbar.ax.tick_params(labelsize=10)
+        cbar.ax.tick_params(labelsize=PlotStyleConfig.ANNOTATION_SIZE) # Use config
         
-        plt.tight_layout()
-        file_path = os.path.join(output_folder, 'advanced_correlation_matrix.png')
-        plt.savefig(file_path, dpi=300, bbox_inches='tight', facecolor='white')
-        plt.close(fig) # Close the figure
+        # plt.tight_layout() # save_and_close_figure handles this
+        file_path = get_plot_filepath(output_folder, 'advanced_correlation_matrix') # Use helper
+        save_and_close_figure(fig, file_path, dpi=PlotStyleConfig.DPI) # Use helper
         print(f"Advanced correlation matrix visualization completed and saved to {file_path}")
         
     except Exception as e:
         print(f"Error creating advanced correlation matrix: {e}")
         print("Falling back to standard correlation matrix...")
         
-        fig, ax = plt.subplots(figsize=(12, 10)) # Create new figure for fallback
+        fig_fallback, ax_fallback = create_figure_with_style(figsize=(12,10)) # Use helper
         sns.heatmap(correlation_matrix, annot=True, cmap='viridis', center=0,
-                   square=True, linewidths=0.5, cbar_kws={"shrink": .8}, ax=ax)
-        plt.title('Correlation Matrix (Fallback)', fontsize=16, fontweight='bold')
-        plt.tight_layout()
-        fallback_file_path = os.path.join(output_folder, 'correlation_matrix_fallback.png')
-        plt.savefig(fallback_file_path, dpi=300, bbox_inches='tight', facecolor='white')
-        plt.close(fig) # Close the figure
+                   square=True, linewidths=0.5, cbar_kws={"shrink": .8}, ax=ax_fallback)
+        apply_axis_style(ax_fallback, title='Correlation Matrix (Fallback)', title_size=PlotStyleConfig.TITLE_SIZE) # Use helper
+
+        fallback_file_path = get_plot_filepath(output_folder, 'correlation_matrix_fallback') # Use helper
+        save_and_close_figure(fig_fallback, fallback_file_path, dpi=PlotStyleConfig.DPI) # Use helper
         print(f"Fallback correlation matrix saved to {fallback_file_path}")
 
 
@@ -360,26 +751,26 @@ def perform_eda(df, target_column, output_folder):
     
     # --- Target Variable Distribution ---
     print(f"\n--- Analyzing '{target_column}' Distribution ---")
-    fig, ax = plt.subplots(figsize=(12, 6))
-    # 使用更温暖的颜色 - 蓝绿色而不是紫色
-    hist_color = '#2E8B57'  # Sea Green - 更专业的颜色
-    kde_color = '#FF6B35'   # Orange Red - 与蓝绿色形成良好对比
+    fig, ax = create_figure_with_style(figsize=(12, 6)) # Use helper
 
-    sns.histplot(df[target_column], kde=True, bins=30, color=hist_color,
-                 alpha=0.7, ax=ax)
-    # Add KDE line with contrasting color
-    sns.kdeplot(df[target_column], color=kde_color, linewidth=3, ax=ax)
+    # Colors from PlotStyleConfig or specific ones if necessary
+    hist_color = PlotStyleConfig.PRIMARY_COLOR # Example: Using primary color
+    kde_color = PlotStyleConfig.ACCENT_COLOR   # Example: Using accent color for contrast
 
-    # 使用论文标准字体大小
-    ax.set_title(f'Distribution of {target_column}', fontsize=18, fontweight='bold')
-    ax.set_xlabel(target_column, fontsize=14, fontweight='bold')
-    ax.set_ylabel('Frequency', fontsize=14, fontweight='bold')
-    ax.tick_params(axis='both', labelsize=12)
-    ax.grid(alpha=0.3, color='#7e7e7e')
+    sns.histplot(df[target_column], kde=False, bins=30, color=hist_color, alpha=PlotStyleConfig.ALPHA, ax=ax) # kde=False, will plot separately for better control
 
-    file_path = os.path.join(output_folder, 'target_distribution.png')
-    plt.savefig(file_path, dpi=300, bbox_inches='tight', facecolor='white')
-    plt.close(fig)
+    # Plot KDE separately on the same axis
+    sns.kdeplot(df[target_column], color=kde_color, linewidth=PlotStyleConfig.LINEWIDTH, ax=ax)
+
+    apply_axis_style(ax,
+                     title=f'Distribution of {target_column}',
+                     xlabel=target_column,
+                     ylabel='Frequency')
+    # ax.grid(alpha=PlotStyleConfig.GRID_ALPHA, color=PlotStyleConfig.NEUTRAL_COLOR) # apply_axis_style handles grid
+    # ax.tick_params(axis='both', labelsize=PlotStyleConfig.TICK_SIZE) # apply_axis_style handles ticks
+
+    file_path = get_plot_filepath(output_folder, 'target_distribution') # Use helper
+    save_and_close_figure(fig, file_path) # Use helper
     print(f"Target distribution plot saved to {file_path}")
 
     
@@ -443,36 +834,41 @@ def perform_eda(df, target_column, output_folder):
         top_features = target_corr.index[1:4].tolist()  # Top 3 features excluding target itself
         
         if len(top_features) >= 2:
-            fig_interaction, axes_interaction = plt.subplots(1, min(3, len(top_features)*(len(top_features)-1)//2), figsize=(18, 5), squeeze=False) # Ensure axes is 2D
-            axes_flat = axes_interaction.flatten()
-            plot_idx = 0
-            
-            # Generate unique pairs of top features
-            from itertools import combinations
-            feature_pairs = list(combinations(top_features, 2))
+            num_pairs = min(3, len(top_features)*(len(top_features)-1)//2)
+            if num_pairs > 0:
+                fig_interaction, axes_flat = create_subplot_grid(1, num_pairs, figsize=(18, 5),
+                                                               main_title='Feature Interaction Analysis with Target Variable')
+                plot_idx = 0
+                
+                # Generate unique pairs of top features
+                from itertools import combinations
+                feature_pairs = list(combinations(top_features, 2))
 
-            for i, (feat1, feat2) in enumerate(feature_pairs):
-                if i >= len(axes_flat): break # Avoid index out of bounds if fewer subplots than pairs
+                for i, (feat1, feat2) in enumerate(feature_pairs):
+                    if i >= len(axes_flat): break
+
+                    ax_current = axes_flat[i]
+                    scatter = ax_current.scatter(df[feat1], df[feat2], c=df[target_column],
+                                            cmap=CONTINUOUS_CMAP, alpha=PlotStyleConfig.ALPHA, s=50)
+                    apply_axis_style(ax_current,
+                                     title=f'Interaction: {feat1} vs {feat2}',
+                                     xlabel=feat1,
+                                     ylabel=feat2,
+                                     title_size=PlotStyleConfig.SUBTITLE_SIZE) # Smaller title for subplots
+
+                    cbar = fig_interaction.colorbar(scatter, ax=ax_current)
+                    cbar.set_label(target_column, fontsize=PlotStyleConfig.ANNOTATION_SIZE)
+                    cbar.ax.tick_params(labelsize=PlotStyleConfig.ANNOTATION_SIZE)
+                    plot_idx +=1
                 
-                ax_current = axes_flat[i]
-                scatter = ax_current.scatter(df[feat1], df[feat2], c=df[target_column],
-                                        cmap=CONTINUOUS_CMAP, alpha=0.6, s=50)
-                ax_current.set_xlabel(feat1, fontsize=12, fontweight='bold')
-                ax_current.set_ylabel(feat2, fontsize=12, fontweight='bold')
-                ax_current.set_title(f'Interaction: {feat1} vs {feat2}', fontsize=12, fontweight='bold')
-                ax_current.grid(alpha=0.3)
-                
-                cbar = fig_interaction.colorbar(scatter, ax=ax_current) # Use fig_interaction for colorbar
-                cbar.set_label(target_column, fontsize=10)
-                plot_idx +=1
-            
-            if plot_idx > 0 : # Only save if plots were made
-                fig_interaction.suptitle('Feature Interaction Analysis with Target Variable', fontsize=16, fontweight='bold')
-                plt.tight_layout(rect=[0, 0, 1, 0.96]) # Adjust layout to make space for suptitle
-                interaction_file_path = os.path.join(output_folder, 'feature_interaction_analysis.png')
-                plt.savefig(interaction_file_path, dpi=300, bbox_inches='tight')
-                plt.close(fig_interaction)
-                print(f"Feature interaction plot saved to {interaction_file_path}")
+                if plot_idx > 0 :
+                    # fig_interaction.suptitle('Feature Interaction Analysis with Target Variable', fontsize=PlotStyleConfig.MAIN_TITLE_SIZE, fontweight='bold') # Handled by create_subplot_grid
+                    # plt.tight_layout(rect=[0, 0, 1, 0.96]) # save_and_close_figure handles tight_layout
+                    interaction_file_path = get_plot_filepath(output_folder, 'feature_interaction_analysis')
+                    save_and_close_figure(fig_interaction, interaction_file_path)
+                    print(f"Feature interaction plot saved to {interaction_file_path}")
+            else:
+                print("Not enough feature pairs for interaction plot.")
         else:
             print("Not enough top features for interaction plot or target not in numeric_df.")
 
@@ -486,11 +882,16 @@ def perform_eda(df, target_column, output_folder):
         
         if len(pairplot_cols) > 1: # Pairplot needs at least 2 columns
             print(f"Generating pairplot for: {pairplot_cols}")
-            g = sns.pairplot(df[pairplot_cols], diag_kind='kde', plot_kws={'alpha': 0.6})
-            g.fig.suptitle('Pairwise Interactions of Top Correlated Features with Target', y=1.02, fontsize=14, fontweight='bold')
-            pairplot_file_path = os.path.join(output_folder, 'EDA_pairplot.png')
-            plt.savefig(pairplot_file_path, dpi=300, bbox_inches='tight')
-            plt.close(g.fig)
+            g = sns.pairplot(df[pairplot_cols], diag_kind='kde', plot_kws={'alpha': PlotStyleConfig.ALPHA})
+            g.fig.suptitle('Pairwise Interactions of Top Correlated Features with Target', y=1.02, fontsize=PlotStyleConfig.TITLE_SIZE, fontweight='bold')
+            # Apply styling to individual axes if needed, though pairplot handles much of it.
+            # For example, to ensure tick sizes are consistent:
+            for ax_pair in g.axes.flatten():
+                if ax_pair is not None:
+                    ax_pair.tick_params(axis='both', labelsize=PlotStyleConfig.TICK_SIZE)
+
+            pairplot_file_path = get_plot_filepath(output_folder, 'EDA_pairplot')
+            save_and_close_figure(g.fig, pairplot_file_path) # Use helper, g.fig is the figure object
             print(f"Pairplot saved to {pairplot_file_path}")
         else:
             print("Not enough columns for pairplot after filtering.")
@@ -718,24 +1119,26 @@ def build_stacking_model(X_train, X_test, y_train, y_test, preprocessor, output_
         r2_individual = r2_score(y_test, y_pred_individual)
         individual_scores[name] = r2_individual
     
-    fig_comp, ax_comp = plt.subplots(figsize=(12, 8))
+    fig_comp, ax_comp = create_figure_with_style(figsize=(12, 8))
     model_names_plot = list(individual_scores.keys()) + ['Stacking']
     r2_scores_plot = list(individual_scores.values()) + [r2_test_stacking]
-    # Use viridis-based gradient for model performance
-    colors = plt.cm.viridis(np.linspace(0.2, 0.9, len(model_names_plot)))
-    bars = ax_comp.bar(model_names_plot, r2_scores_plot, color=colors, alpha=0.8,
-                      edgecolor=VIRIDIS_NEUTRAL, linewidth=1.5)
-    for bar_item, score_item in zip(bars, r2_scores_plot): # Corrected variable names
-        height = bar_item.get_height()
-        ax_comp.text(bar_item.get_x() + bar_item.get_width()/2., height + 0.01, f'{score_item:.3f}', ha='center', va='bottom', fontweight='bold')
-    
-    ax_comp.set_title('Model Performance Comparison (R² Score) - Stacking', fontsize=14, fontweight='bold')
-    ax_comp.set_ylabel('R² Score'); ax_comp.set_xlabel('Models')
-    plt.xticks(rotation=45, ha='right'); ax_comp.grid(axis='y', alpha=0.3)
-    plt.tight_layout()
-    stacking_comp_path = os.path.join(output_folder, 'stacking_model_comparison.png')
-    plt.savefig(stacking_comp_path, dpi=300, bbox_inches='tight')
-    plt.close(fig_comp)
+
+    colors = PlotStyleConfig.get_viridis_palette(len(model_names_plot))
+    bars = ax_comp.bar(model_names_plot, r2_scores_plot, color=colors, alpha=PlotStyleConfig.ALPHA,
+                      edgecolor=PlotStyleConfig.NEUTRAL_COLOR, linewidth=1.5) # Use config colors
+
+    add_performance_annotations(ax_comp, bars, r2_scores_plot, format_str='{:.3f}') # Use helper
+
+    apply_axis_style(ax_comp,
+                     title='Model Performance Comparison (R² Score) - Stacking',
+                     xlabel='Models',
+                     ylabel='R² Score',
+                     title_size=PlotStyleConfig.SUBTITLE_SIZE) # Adjusted title size
+    plt.xticks(rotation=45, ha='right') # Keep this custom tick rotation
+    # ax_comp.grid(axis='y', alpha=PlotStyleConfig.GRID_ALPHA) # apply_axis_style handles grid
+
+    stacking_comp_path = get_plot_filepath(output_folder, 'stacking_model_comparison')
+    save_and_close_figure(fig_comp, stacking_comp_path)
     print(f"Stacking model comparison plot saved to {stacking_comp_path}")
     
     return stacking_regressor, X_train_processed, X_test_processed, preprocessor # Return original preprocessor
@@ -863,12 +1266,12 @@ def explain_stacking_model_with_shap(stacking_model, X_train_processed, X_test_p
                 ax_detail = plt.gca()
                 ax_detail.tick_params(axis='both', labelsize=12)
                 ax_detail.set_xlabel(ax_detail.get_xlabel(), fontsize=14, fontweight='bold')
-                ax_detail.set_ylabel(ax_detail.get_ylabel(), fontsize=14, fontweight='bold')
+                ax_detail.set_ylabel(ax_detail.get_ylabel(), fontsize=PlotStyleConfig.LABEL_SIZE, fontweight='bold') # Use config
 
-                plt.tight_layout()
-                individual_path = os.path.join(output_folder, f'shap_{model_name.lower()}_detailed.png')
-                plt.savefig(individual_path, dpi=300, bbox_inches='tight', facecolor='white')
-                plt.close()
+                # plt.tight_layout() # Handled by save_and_close_figure
+                individual_filename = f'shap_{model_name.lower()}_detailed'
+                individual_path = get_plot_filepath(output_folder, individual_filename) # Use helper
+                save_and_close_figure(plt.gcf(), individual_path) # Use helper, plt.gcf() to get current figure
 
                 print(f"  📊 详细SHAP图保存到: {individual_path}")
 
@@ -889,13 +1292,13 @@ def explain_stacking_model_with_shap(stacking_model, X_train_processed, X_test_p
 
         # 设置整体标题和布局 - 论文标准
         plt.suptitle('Base Learners SHAP Feature Importance Analysis',
-                    fontsize=20, fontweight='bold', y=0.98)
-        plt.tight_layout(rect=[0, 0, 1, 0.95])
+                    fontsize=PlotStyleConfig.MAIN_TITLE_SIZE, fontweight='bold', y=0.98) # Use config
+        # plt.tight_layout(rect=[0, 0, 1, 0.95]) # Handled by save_and_close_figure
 
         # 保存组合图
-        base_shap_path = os.path.join(output_folder, 'stacking_level1_base_learners_shap_dot.png')
-        plt.savefig(base_shap_path, dpi=300, bbox_inches='tight', facecolor='white')
-        plt.close()
+        base_shap_filename = 'stacking_level1_base_learners_shap_dot'
+        base_shap_path = get_plot_filepath(output_folder, base_shap_filename) # Use helper
+        save_and_close_figure(plt.gcf(), base_shap_path) # Use helper
 
         print(f"✅ 基础学习器SHAP组合图保存到: {base_shap_path}")
 
@@ -944,12 +1347,12 @@ def explain_stacking_model_with_shap(stacking_model, X_train_processed, X_test_p
         ax_meta = plt.gca()
         ax_meta.tick_params(axis='both', labelsize=12)
         ax_meta.set_xlabel(ax_meta.get_xlabel(), fontsize=14, fontweight='bold')
-        ax_meta.set_ylabel(ax_meta.get_ylabel(), fontsize=14, fontweight='bold')
+        ax_meta.set_ylabel(ax_meta.get_ylabel(), fontsize=PlotStyleConfig.LABEL_SIZE, fontweight='bold') # Use config
 
-        plt.tight_layout()
-        meta_shap_path = os.path.join(output_folder, 'stacking_meta_learner_shap_bar.png')
-        plt.savefig(meta_shap_path, dpi=300, bbox_inches='tight', facecolor='white')
-        plt.close()
+        # plt.tight_layout() # Handled by save_and_close_figure
+        meta_shap_filename = 'stacking_meta_learner_shap_bar'
+        meta_shap_path = get_plot_filepath(output_folder, meta_shap_filename) # Use helper
+        save_and_close_figure(plt.gcf(), meta_shap_path) # Use helper
         print(f"Meta-learner SHAP bar plot saved to {meta_shap_path}")
 
     except Exception as e:
@@ -1054,13 +1457,13 @@ def create_pdp_analysis(model_to_explain, X_data_processed, feature_names_pdp, o
             axes_pdp[idx].set_visible(False)
 
         # 设置整体标题 - 论文标准
-        fig_pdp.suptitle(f'Partial Dependence Analysis - {model_name_str or "Model"}',
-                        fontsize=18, fontweight='bold', y=0.98)
+        # fig_pdp.suptitle(f'Partial Dependence Analysis - {model_name_str or "Model"}', # Handled by create_subplot_grid
+        #                 fontsize=PlotStyleConfig.MAIN_TITLE_SIZE, fontweight='bold', y=0.98) # Use config
 
-        plt.tight_layout(rect=[0, 0, 1, 0.95])
-        pdp_summary_path = os.path.join(output_folder, f'{plot_filename_prefix}_partial_dependence_plots.png')
-        plt.savefig(pdp_summary_path, dpi=300, bbox_inches='tight', facecolor='white')
-        plt.close(fig_pdp)
+        # plt.tight_layout(rect=[0, 0, 1, 0.95]) # Handled by save_and_close_figure
+        pdp_summary_filename = f'{plot_filename_prefix}_partial_dependence_plots'
+        pdp_summary_path = get_plot_filepath(output_folder, pdp_summary_filename) # Use helper
+        save_and_close_figure(fig_pdp, pdp_summary_path) # Use helper
         print(f"📊 综合PDP图保存至: {pdp_summary_path}")
 
         # === 2. 个别特征的详细PDP图 ===
@@ -1110,14 +1513,13 @@ def create_pdp_analysis(model_to_explain, X_data_processed, feature_names_pdp, o
                     pass  # 如果添加置信区间失败，继续
 
                 # 设置背景
-                ax_ind_pdp.set_facecolor('white')
+                ax_ind_pdp.set_facecolor('white') # create_figure_with_style sets facecolor, this is for axis
 
-                plt.tight_layout()
+                # plt.tight_layout() # Handled by save_and_close_figure
 
-                safe_filename_pdp = f"pdp_{plot_filename_prefix}_{feature_name.replace(' ', '_').replace('/', '_')}.png"
-                ind_pdp_path = os.path.join(output_folder, safe_filename_pdp)
-                plt.savefig(ind_pdp_path, dpi=300, bbox_inches='tight', facecolor='white')
-                plt.close(fig_ind_pdp)
+                safe_filename_pdp_base = f"pdp_{plot_filename_prefix}_{safe_filename(feature_name)}" # Use safe_filename for feature_name part
+                ind_pdp_path = get_plot_filepath(output_folder, safe_filename_pdp_base) # Use helper
+                save_and_close_figure(fig_ind_pdp, ind_pdp_path) # Use helper
                 print(f"📈 详细PDP图 ({feature_name}) 保存至: {ind_pdp_path}")
 
             except Exception as e:
@@ -1177,13 +1579,13 @@ def create_pdp_analysis(model_to_explain, X_data_processed, feature_names_pdp, o
                     for idx in range(len(top_features), 4):
                         axes_imp[idx].set_visible(False)
 
-                    fig_imp.suptitle(f'Top Important Features PDP Analysis - {model_name_str or "Model"}',
-                                   fontsize=18, fontweight='bold', y=0.98)
+                    # fig_imp.suptitle(f'Top Important Features PDP Analysis - {model_name_str or "Model"}', # Handled by create_subplot_grid
+                    #                fontsize=PlotStyleConfig.MAIN_TITLE_SIZE, fontweight='bold', y=0.98) # Use config
 
-                    plt.tight_layout(rect=[0, 0, 1, 0.95])
-                    importance_pdp_path = os.path.join(output_folder, f'{plot_filename_prefix}_top_importance_pdp.png')
-                    plt.savefig(importance_pdp_path, dpi=300, bbox_inches='tight', facecolor='white')
-                    plt.close(fig_imp)
+                    # plt.tight_layout(rect=[0, 0, 1, 0.95]) # Handled by save_and_close_figure
+                    importance_pdp_filename = f'{plot_filename_prefix}_top_importance_pdp'
+                    importance_pdp_path = get_plot_filepath(output_folder, importance_pdp_filename) # Use helper
+                    save_and_close_figure(fig_imp, importance_pdp_path) # Use helper
                     print(f"🏆 重要性PDP图保存至: {importance_pdp_path}")
 
         except Exception as e:
@@ -1212,25 +1614,25 @@ def _plot_shap_summary_plot(shap_values, X_test_df, output_folder, model_name_st
         plt.title(f'SHAP Feature Importance - {model_name_str}', fontsize=18, fontweight='bold')
         ax_bar = plt.gca()
         ax_bar.tick_params(axis='both', labelsize=12)
-        ax_bar.set_xlabel(ax_bar.get_xlabel(), fontsize=14, fontweight='bold')
-        ax_bar.set_ylabel(ax_bar.get_ylabel(), fontsize=14, fontweight='bold')
-        plt.tight_layout()
-        shap_bar_path = os.path.join(output_folder, f'shap_summary_plot_bar_{plot_filename_prefix}.png')
-        plt.savefig(shap_bar_path, dpi=300, bbox_inches='tight', facecolor='white')
-        plt.close()
+        ax_bar.set_xlabel(ax_bar.get_xlabel(), fontsize=PlotStyleConfig.LABEL_SIZE, fontweight='bold') # Use config
+        ax_bar.set_ylabel(ax_bar.get_ylabel(), fontsize=PlotStyleConfig.LABEL_SIZE, fontweight='bold') # Use config
+        # plt.tight_layout() # Handled by save_and_close_figure
+        shap_bar_filename = f'shap_summary_plot_bar_{plot_filename_prefix}'
+        shap_bar_path = get_plot_filepath(output_folder, shap_bar_filename) # Use helper
+        save_and_close_figure(plt.gcf(), shap_bar_path) # Use helper
         print(f"SHAP bar plot for {model_name_str} saved to {shap_bar_path}")
     except Exception as e:
         print(f"Error creating SHAP bar plot for {model_name_str}: {e}")
 
     # SHAP Summary Plot (Dot)
     try:
-        plt.figure(figsize=(10, 8))
-        shap.summary_plot(shap_values, X_test_df, show=False)
-        plt.title(f'SHAP Summary Plot - {model_name_str}', fontsize=14, fontweight='bold')
-        plt.tight_layout()
-        shap_dot_path = os.path.join(output_folder, f'shap_summary_plot_dot_{plot_filename_prefix}.png')
-        plt.savefig(shap_dot_path, dpi=300, bbox_inches='tight', facecolor='white')
-        plt.close()
+        plt.figure(figsize=(10, 8)) # SHAP creates its own figure here, so direct plt.figure is fine
+        shap.summary_plot(shap_values, X_test_df, show=False) # This function likely calls plt.gca() internally
+        plt.title(f'SHAP Summary Plot - {model_name_str}', fontsize=PlotStyleConfig.TITLE_SIZE, fontweight='bold') # Use config
+        # plt.tight_layout() # Handled by save_and_close_figure
+        shap_dot_filename = f'shap_summary_plot_dot_{plot_filename_prefix}'
+        shap_dot_path = get_plot_filepath(output_folder, shap_dot_filename) # Use helper
+        save_and_close_figure(plt.gcf(), shap_dot_path) # Use helper
         print(f"SHAP dot plot for {model_name_str} saved to {shap_dot_path}")
     except Exception as e:
         print(f"Error creating SHAP dot plot for {model_name_str}: {e}")
@@ -1330,10 +1732,10 @@ def explain_model_with_shap(model_pipeline, X_train_orig, X_test_orig, output_fo
             dep_path = os.path.join(output_folder, safe_filename_dep)
             
             # 直接生成并保存依赖图
-            plt.figure()
+            plt.figure() # SHAP dependence_plot creates its own figure elements
             shap.dependence_plot(feature_item, shap_values_for_dependence, X_data_for_dependence, show=False)
-            plt.savefig(dep_path, dpi=300, bbox_inches='tight')
-            plt.close()
+            # Title and styles are often handled by shap.dependence_plot itself or would need gca() and then apply_axis_style
+            save_and_close_figure(plt.gcf(), dep_path) # Use helper
             
             print(f"SHAP dependence plot for {feature_item} ({model_name_str}) saved to {dep_path}")
         except Exception as e:
@@ -1423,22 +1825,7 @@ def _plot_r2_comparison_chart(results_df, output_folder, chart_type):
                 ax.bar_label(container, fmt='%.4f', fontsize=PlotStyleConfig.ANNOTATION_SIZE, padding=3)
             filepath = os.path.join(output_folder, filename)
             save_and_close_figure(fig, filepath)
-        else:
-            fig, ax = plt.subplots(figsize=(14, 8))
-            n_models = len(plot_df)
-            viridis_palette = plt.cm.viridis(np.linspace(0.2, 0.9, n_models))
-            viridis_palette_list = [tuple(color) for color in viridis_palette]
-            sns.barplot(x=x_col, y=y_col, data=plot_df, palette=viridis_palette_list, ax=ax)
-            ax.set_title(title, fontsize=16, fontweight='bold')
-            ax.set_xlabel(xlabel, fontsize=12)
-            ax.set_ylabel(ylabel, fontsize=12)
-            ax.set_xlim(left=max(0, plot_df[x_col].min() - 0.05) if not plot_df.empty else 0)
-            for container in ax.containers:
-                ax.bar_label(container, fmt='%.4f', fontsize=10, padding=3)
-            plt.tight_layout()
-            filepath = os.path.join(output_folder, filename)
-            plt.savefig(filepath, dpi=300)
-            plt.close(fig)
+        # Removed unreachable else block for PLOT_UTILS_AVAILABLE = False
         print(f"模型比较图已保存至: {filepath}")
         return filepath
 
@@ -1453,51 +1840,28 @@ def _plot_r2_comparison_chart(results_df, output_folder, chart_type):
             return None
         valid_results = valid_results.sort_values('Test R2', ascending=True)
 
-        if PLOT_UTILS_AVAILABLE:
-            fig, ax = create_figure_with_style(figsize=(14, 8))
-            y_pos = np.arange(len(valid_results))
-            width = 0.35
-            train_color = PlotStyleConfig.TRAIN_COLOR
-            test_color = PlotStyleConfig.TEST_COLOR
-            bars1 = ax.barh(y_pos - width/2, valid_results['Train R2'], width,
-                           label='Train R²', color=train_color, alpha=PlotStyleConfig.ALPHA,
-                           edgecolor=PlotStyleConfig.NEUTRAL_COLOR, linewidth=0.5)
-            bars2 = ax.barh(y_pos + width/2, valid_results['Test R2'], width,
-                           label='Test R²', color=test_color, alpha=PlotStyleConfig.ALPHA,
-                           edgecolor=PlotStyleConfig.NEUTRAL_COLOR, linewidth=0.5)
-            ax.set_yticks(y_pos)
-            ax.set_yticklabels(valid_results['Model'], fontsize=PlotStyleConfig.TICK_SIZE, fontweight='bold')
-            apply_axis_style(ax, title=title, xlabel=xlabel, title_size=PlotStyleConfig.TITLE_SIZE)
-            ax.legend(fontsize=PlotStyleConfig.LEGEND_SIZE, loc='lower right')
-            _add_value_annotations(ax, bars1, bars2, valid_results, y_pos)
-            max_r2 = max(valid_results['Train R2'].max(), valid_results['Test R2'].max())
-            ax.set_xlim(0, max_r2 + 0.15)
-            filepath = os.path.join(output_folder, filename)
-            save_and_close_figure(fig, filepath)
-        else:
-            fig, ax = plt.subplots(figsize=(14, 8))
-            y_pos = np.arange(len(valid_results))
-            width = 0.35
-            bars1 = ax.barh(y_pos - width/2, valid_results['Train R2'], width,
-                           label='Train R²', color='#440154', alpha=0.8,
-                           edgecolor='#7e7e7e', linewidth=0.5)
-            bars2 = ax.barh(y_pos + width/2, valid_results['Test R2'], width,
-                           label='Test R²', color='#21908c', alpha=0.8,
-                           edgecolor='#7e7e7e', linewidth=0.5)
-            ax.set_yticks(y_pos)
-            ax.set_yticklabels(valid_results['Model'], fontsize=12, fontweight='bold')
-            ax.set_xlabel('R² Score', fontsize=14, fontweight='bold')
-            ax.set_title(title, fontsize=18, fontweight='bold')
-            ax.tick_params(axis='x', labelsize=12)
-            ax.legend(fontsize=12, loc='lower right')
-            ax.grid(axis='x', alpha=0.3, color='#7e7e7e')
-            _add_value_annotations_basic(ax, bars1, bars2, valid_results, y_pos)
-            max_r2 = max(valid_results['Train R2'].max(), valid_results['Test R2'].max())
-            ax.set_xlim(0, max_r2 + 0.15)
-            plt.tight_layout()
-            filepath = os.path.join(output_folder, filename)
-            plt.savefig(filepath, dpi=300, bbox_inches='tight', facecolor='white')
-            plt.close(fig)
+        # PLOT_UTILS_AVAILABLE is always True now
+        fig, ax = create_figure_with_style(figsize=(14, 8))
+        y_pos = np.arange(len(valid_results))
+        width = 0.35
+        train_color = PlotStyleConfig.TRAIN_COLOR
+        test_color = PlotStyleConfig.TEST_COLOR
+        bars1 = ax.barh(y_pos - width/2, valid_results['Train R2'], width,
+                       label='Train R²', color=train_color, alpha=PlotStyleConfig.ALPHA,
+                       edgecolor=PlotStyleConfig.NEUTRAL_COLOR, linewidth=0.5)
+        bars2 = ax.barh(y_pos + width/2, valid_results['Test R2'], width,
+                       label='Test R²', color=test_color, alpha=PlotStyleConfig.ALPHA,
+                       edgecolor=PlotStyleConfig.NEUTRAL_COLOR, linewidth=0.5)
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(valid_results['Model'], fontsize=PlotStyleConfig.TICK_SIZE, fontweight='bold')
+        apply_axis_style(ax, title=title, xlabel=xlabel, title_size=PlotStyleConfig.TITLE_SIZE)
+        ax.legend(fontsize=PlotStyleConfig.LEGEND_SIZE, loc='lower right')
+        _add_value_annotations(ax, bars1, bars2, valid_results, y_pos) # _add_value_annotations now uses PlotStyleConfig
+        max_r2 = max(valid_results['Train R2'].max(), valid_results['Test R2'].max())
+        ax.set_xlim(0, max_r2 + 0.15)
+        filepath = os.path.join(output_folder, filename)
+        save_and_close_figure(fig, filepath)
+        # Removed unreachable else block for PLOT_UTILS_AVAILABLE = False
         print(f"训练vs测试R²对比图已保存至: {filepath}")
         return filepath
 
@@ -1659,37 +2023,9 @@ def plot_actual_vs_predicted_jointgrid(y_train, y_pred_train, y_test, y_pred_tes
                      frameon=True, fancybox=True, shadow=True)
             plt.tight_layout()
             filename = f'{safe_filename(model_name)}_performance_jointplot.png'
-            filepath = os.path.join(output_folder, filename)
+            filepath = os.path.join(output_folder, filename) # This path generation is fine, or use get_plot_filepath
             save_and_close_figure(plt.gcf(), filepath)
-        else:
-            # Fallback to basic matplotlib
-            palette = {'Train': '#440154', 'Test': '#21908c'}
-            plt.figure(figsize=(12, 10))
-            g = sns.JointGrid(data=data, x="True", y="Predicted", hue="Data Set", height=10, palette=palette)
-            g.plot_joint(sns.scatterplot, alpha=0.6, s=50)
-            sns.regplot(data=data_train, x="True", y="Predicted", scatter=False, ax=g.ax_joint,
-                       color='#440154', label=f'Train (R² = {r2_train:.3f})', line_kws={'linewidth': 2})
-            sns.regplot(data=data_test, x="True", y="Predicted", scatter=False, ax=g.ax_joint,
-                       color='#21908c', label=f'Test (R² = {r2_test:.3f})', line_kws={'linewidth': 2})
-            g.plot_marginals(sns.histplot, kde=False, element='bars', multiple='stack', alpha=0.7)
-
-            # Remove grid from marginal plots for a cleaner look
-            g.ax_marg_x.grid(False)
-            g.ax_marg_y.grid(False)
-
-            ax = g.ax_joint
-            ax.plot([data['True'].min(), data['True'].max()], [data['True'].min(), data['True'].max()],
-                   c="black", alpha=0.7, linestyle='--', linewidth=2, label='Perfect Prediction')
-            ax.set_xlabel('True Values', fontsize=14, fontweight='bold')
-            ax.set_ylabel('Predicted Values', fontsize=14, fontweight='bold')
-            ax.tick_params(axis='both', labelsize=12)
-            ax.legend(loc='upper left', bbox_to_anchor=(0.02, 0.98), fontsize=12, frameon=True, fancybox=True, shadow=True)
-            ax.grid(alpha=0.3, color='#7e7e7e')
-            plt.tight_layout()
-            safe_model_name = model_name.replace(" ", "_").replace("(", "").replace(")", "")
-            filepath = os.path.join(output_folder, f'{safe_model_name}_performance_jointplot.png')
-            plt.savefig(filepath, dpi=300, bbox_inches='tight', facecolor='white')
-            plt.close()
+        # Removed unreachable else block for PLOT_UTILS_AVAILABLE = False
 
         print(f"{model_name}的JointGrid图已保存至: {filepath}")
         return filepath
@@ -1750,47 +2086,13 @@ def _create_fallback_scatter_plot(y_train, y_pred_train, y_test, y_pred_test, ou
         axes[1].legend(fontsize=PlotStyleConfig.LEGEND_SIZE)
 
         # 保存图片
-        filename = f'{safe_filename(model_name)}_performance_fallback.png'
-        filepath = os.path.join(output_folder, filename)
+        filename = f'{safe_filename(model_name)}_performance_fallback.png' # This is fine
+        filepath = os.path.join(output_folder, filename) # Or use get_plot_filepath after this line
         save_and_close_figure(fig, filepath)
+    # Removed unreachable else block for PLOT_UTILS_AVAILABLE = False
 
-    else:
-        # 传统版本
-        fig, axes = plt.subplots(1, 2, figsize=(15, 6))
-
-        # 训练集
-        axes[0].scatter(y_train, y_pred_train, alpha=0.6, color='#440154', s=50)
-        axes[0].plot([y_train.min(), y_train.max()], [y_train.min(), y_train.max()],
-                    '--k', linewidth=2, label='Perfect Prediction')
-        axes[0].set_xlabel('True Values', fontsize=14, fontweight='bold')
-        axes[0].set_ylabel('Predicted Values', fontsize=14, fontweight='bold')
-        axes[0].set_title(f'Training Set (R² = {r2_score(y_train, y_pred_train):.3f})',
-                         fontsize=16, fontweight='bold')
-        axes[0].legend(fontsize=12)
-        axes[0].grid(alpha=0.3)
-        axes[0].tick_params(axis='both', labelsize=12)
-
-        # 测试集
-        axes[1].scatter(y_test, y_pred_test, alpha=0.6, color='#21908c', s=50)
-        axes[1].plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()],
-                    '--k', linewidth=2, label='Perfect Prediction')
-        axes[1].set_xlabel('True Values', fontsize=14, fontweight='bold')
-        axes[1].set_ylabel('Predicted Values', fontsize=14, fontweight='bold')
-        axes[1].set_title(f'Test Set (R² = {r2_score(y_test, y_pred_test):.3f})',
-                         fontsize=16, fontweight='bold')
-        axes[1].legend(fontsize=12)
-        axes[1].grid(alpha=0.3)
-        axes[1].tick_params(axis='both', labelsize=12)
-
-        plt.suptitle(f'{model_name} Performance: Actual vs Predicted', fontsize=18, fontweight='bold')
-        plt.tight_layout()
-
-        safe_model_name = model_name.replace(" ", "_").replace("(", "").replace(")", "")
-        filepath = os.path.join(output_folder, f'{safe_model_name}_performance_fallback.png')
-        plt.savefig(filepath, dpi=300, bbox_inches='tight', facecolor='white')
-        plt.close()
-
-    print(f"{model_name}的备用图已保存至: {filepath}")
+    print(f"{model_name}的备用图已保存至: {filepath}") # This line might cause an error if fig was not defined due to PLOT_UTILS_AVAILABLE being false previously.
+                                                 # However, since it's always true now, fig and filepath will be defined.
     return filepath
 
 
@@ -2267,9 +2569,10 @@ def main_visualization_script_test(): # Renamed to avoid conflict if this file i
     # Correctly locate the data file relative to this script's location
     # The script is in 'agentlaboratory623', data is in 'agentlaboratory/data/raw'
     # This makes the test runnable from any directory.
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    default_data_path = os.path.join(base_dir, '..', 'multi_agents_research_en', 'data', 'raw', 'Si2025_5_4.csv')
-    data_path_to_use = default_data_path
+    # base_dir = os.path.dirname(os.path.abspath(__file__))
+    # default_data_path = os.path.join(base_dir, '..', 'multi_agents_research_en', 'data', 'raw', 'Si2025_5_4.csv')
+    # data_path_to_use = default_data_path
+    data_path_to_use = "dummy_si_data.csv" # Use local dummy data for testing
     target_column_name = "Effective_Silicon"
     
     # Create output folder for this test run
